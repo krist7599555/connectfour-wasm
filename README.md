@@ -6,201 +6,222 @@
 ![](screenshot.png)
 
 ```rust
-use lazy_static::lazy_static;
-use std::collections::{ HashMap, VecDeque, HashSet };
-use std::time::Instant;
-use std::iter::repeat;
-use rand::seq::SliceRandom;
+use wasm_bindgen::prelude::*;
 
-static FINISH_TABLE: &str = "123456789ABCDEF0";
+#[cfg(feature = "wee_alloc")]
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
-lazy_static! {
-
-  static ref INDEX_TO_COOR: Vec<(i32, i32)> = (0..16)
-    .map(|pos| { (pos / 4, pos % 4) })
-    .collect();
-
-  static ref MOVE_POSITION: Vec<Vec<usize>> = (0..16)
-    .map(|pos| { 
-      let (i, j) = (pos / 4, pos % 4);
-      let mut dirs = vec![];
-      if j > 0 { dirs.push(pos-1) }
-      if j < 3 { dirs.push(pos+1) }
-      if i > 0 { dirs.push(pos-4) }
-      if i < 3 { dirs.push(pos+4) }
-      return dirs;
-    })
-    .collect();
-
-  static ref INVERSE_DIRECTIONS: HashMap<char, char> = vec![
-    ('U', 'D'),
-    ('L', 'R'),
-    ('R', 'L'),
-    ('D', 'U')
-  ].into_iter().collect();
-
-  static ref DIR_2_CHAR: HashMap<i32, char> = vec![
-    (-4, 'U'),
-    (-1, 'L'),
-    (1, 'R'),
-    (4, 'D'),
-  ].into_iter().collect();
-
-  static ref PRECOMPUTED_ANSWERS: HashMap<String, String> = generate_precomputed_answer(14);
+#[wasm_bindgen]
+extern "C" {
+    fn alert(s: &str);
 }
 
-fn start_idx(table: &str) -> usize {
-  return table.find('0').unwrap()
+use std::fmt;
+use std::option::{ Option };
+
+
+const WIN_SIZE: usize = 4;
+const BOARD_SIZE: usize = 7;
+const MAX_DEPT: usize = 6;
+const WIN_SCORE: f64 = 100000000.0;
+const MAGIC_SCALE: [f64; WIN_SIZE + 1] = [0.0, 20.0, 1600.0, 3200000.0, WIN_SCORE];
+
+#[derive(Debug, Copy, Clone)]
+struct WinRate {
+	winrate: f64,
+	index: usize,
 }
 
-fn walk(table: &str, i: usize, j: usize) -> String {
-  let mut s: Vec<char> = table.chars().into_iter().collect();
-  s.swap(i, j);
-  let s2: String = s.iter().collect();
-  return s2;
+#[derive(Copy, Clone)]
+struct Connect4 {
+	board: [[u8; BOARD_SIZE]; BOARD_SIZE]
 }
 
-fn heuristic(table: &str) -> i32 {
-  return table.chars().enumerate().map(|(idx, val)| {
-    let (ai, aj) = INDEX_TO_COOR[idx];
-    let (bi, bj) = INDEX_TO_COOR[FINISH_TABLE.find(val).unwrap()];
-    return (ai - bi).abs() + (aj - bj).abs()
-  }).sum();
-}
+impl Connect4 {
 
-#[derive(Debug, Clone)]
-struct State {
-  table: String,
-  path: String,
-  cost: i32,
-}
-
-impl State {
-  fn ways(&self) -> Vec<State> {
-    let pos = start_idx(&self.table);
-    return MOVE_POSITION[pos].iter().map(|&nex_pos| {
-      return State {
-        table: walk(&self.table, pos, nex_pos),
-        path: format!("{}{}", self.path, DIR_2_CHAR[&(nex_pos as i32 - pos as i32)]),
-        cost: self.cost + 1,
-      }
-    }).collect()
-  }
-}
-
-
-fn generate_table(mut table:  String, mut iter: usize) -> String {
-  let mut prv = 100000;
-  let mut cur = start_idx(&table);
-  let mut rng = rand::thread_rng();
-  while iter > 0 {
-    let &nex = MOVE_POSITION[cur].choose(&mut rng).unwrap();
-    if nex != prv {
-      table = walk(&table, cur, nex);
-      prv = cur;
-      cur = nex;
-      iter -= 1;
-    }
-  }
-  return table;
-}
-
-fn str_grid(inp: &String, n: usize) -> String {
-  let mut res = vec![];
-  for i in (0..inp.len()).step_by(n) {
-    res.push(&inp[i..(i+n)]);
-  }
-  return res.join("\n");
-}
-
-fn generate_precomputed_answer(n: usize) -> HashMap<String, String> {
-  let mut memo = HashSet::new();
-  let mut ans = vec![State {table: FINISH_TABLE.to_string(), path: "".to_string(), cost: 0 }];
-  for i in 0.. {
-    if i >= ans.len() {
-      break
-    }
-    for nex in ans[i].ways() {
-      if nex.path.len() > n {
-        break
-      }
-      if !memo.contains(&nex.table) {
-        memo.insert(nex.table.to_string());
-        ans.push(nex)
+	// constructure 
+	fn new() -> Connect4 {
+		return Connect4 {
+			board: [[0; BOARD_SIZE]; BOARD_SIZE]
+		};
+	}
+	fn from(inp: Vec<i32>) -> Connect4 {
+    let mut game = Connect4::new();
+    for i in 0..BOARD_SIZE {
+      for j in 0..BOARD_SIZE {
+        game.board[i][j] = match inp[i * BOARD_SIZE + j] {
+          0|1|2 => inp[i * BOARD_SIZE + j] as u8,
+          _ => panic!("input invalid")
+        };
       }
     }
-  }
-  return ans
-    .iter()
-    .map(|s| { (
-      s.table.to_string(), 
-      s.path
-        .chars()
-        .rev()
-        .map(|c| INVERSE_DIRECTIONS.get(&c).unwrap())
-        .collect::<String>()
-    )})
-    .collect();
+		return game;
+	}
+
+	// util
+	fn is_valid_index(i: i32, j: i32) -> bool {
+		return 0 <= i && i < BOARD_SIZE as i32 && 0 <= j && j < BOARD_SIZE as i32;
+	}
+
+	fn axis(&self) -> Vec<Vec<u8>> {
+		let mut ans: Vec<Vec<u8>> = vec![];
+		let directions: Vec<(i32, i32)> = vec![(0, 1), (1, 0), (1, 1), (1, -1)];
+		for i in 0..BOARD_SIZE as i32 {
+			for j in 0..BOARD_SIZE as i32 {
+				for (di, dj) in directions.iter() {
+					let linear = (0..WIN_SIZE as i32)
+						.map(|x| (i + x * di, j + x * dj))
+						.filter(|(ii, jj)| Connect4::is_valid_index(*ii, *jj))
+						.map(|(ii, jj)| self.board[ii as usize][jj as usize])
+						.collect::<Vec<u8>>();
+					if linear.len() == WIN_SIZE {
+						ans.push(linear);
+					}
+				}
+			}
+		}
+		return ans;
+	}
+
+	// get winner if win
+	fn winner(&self) -> Option<u8> {
+		return match self.axis().iter()
+		.find(|&items| items.iter().all(|&itm| itm == items[0] && itm != 0)) {
+			Some(players) => Some(players[0]),
+			None => None
+		}
+	}
+
+	//  heuristuc value [-inf, inf]
+	fn winrate(&self, player: u8) -> f64 {
+		let mut p1 = 0.0;
+		let mut p2 = 0.0;
+		for items in self.axis() {
+			let emp = items.iter().fold(0, |acc, &item| acc + (if item == 0 {1} else {0}));
+			let pl1 = items.iter().fold(0, |acc, &item| acc + (if item == 1 {1} else {0}));
+			let pl2 = items.iter().fold(0, |acc, &item| acc + (if item == 2 {1} else {0}));
+			if emp + pl1 == WIN_SIZE { p1 += MAGIC_SCALE[pl1]; }
+			if emp + pl2 == WIN_SIZE { p2 += MAGIC_SCALE[pl2]; }
+			if pl1 == WIN_SIZE { return if player == 1 { WIN_SCORE } else { -WIN_SCORE }; }
+			if pl2 == WIN_SIZE { return if player == 2 { WIN_SCORE } else { -WIN_SCORE }; }
+		}
+		let p1_winrate = p1 - p2;
+		return match player {
+			1 => p1_winrate,
+			2 => -p1_winrate,
+			_ => panic!("winrate must be player 1-2")
+		}
+	}
+	
+	fn get_valid_moves(&self) -> Vec<usize> {
+		return self.board.iter()
+			.enumerate()
+			.filter(|(_, &arr)| { arr.last().unwrap() == &0 })
+			.map(|(idx, _)| { idx })
+			.collect();
+	}
+
+	// mutable game state
+	fn push(&mut self, row: usize, player: u8) -> Result<(), ()> {
+		if let Some(it) = self.board[row].iter_mut().find(|&&mut val| val == 0) {
+			*it = player;
+			Ok(())
+		} else {
+			Err(())
+		}
+	}
+	fn pop(&mut self, row: usize) -> Result<u8, ()> {
+		if let Some(it) = self.board[row].iter_mut().rev().find(|&&mut val| val != 0) {
+			let itm = *it;
+			*it = 0;
+			Ok(itm)
+		} else {
+			Err(())
+		}
+	}
+
+	// search for best move by minimax
+ 	fn _best_move(&mut self, player: u8, dept: usize) -> WinRate {
+		let curr_winrate = self.winrate(player);
+		if curr_winrate.abs() + 10000.0 >= WIN_SCORE || dept >= MAX_DEPT {
+			return WinRate {
+				index: BOARD_SIZE,
+				winrate: curr_winrate,
+			}
+		}
+
+		let valid_move = self.get_valid_moves();
+		if valid_move.is_empty() {
+			return WinRate {
+				index: BOARD_SIZE,
+				winrate: 0.0,
+			};
+		}
+
+		let mut winrates = vec![];
+		for row in valid_move {
+			assert!(self.push(row, player).is_ok());
+			let another_player_winrate = self._best_move(player ^ 3, dept + 1).winrate;
+			let current_player_winrate = -another_player_winrate;
+			assert_eq!(player, self.pop(row).unwrap());
+			let winrate = WinRate {
+				index: row,
+				winrate: current_player_winrate
+			};
+			// alpha beta pruning
+			if current_player_winrate + 100.0 >= WIN_SCORE {
+				return winrate;
+			} else {
+				winrates.push(winrate);
+			}
+		}
+		return winrates
+			.iter()
+			.max_by(|lhs, rhs| if lhs.winrate < rhs.winrate { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater })
+			.unwrap()
+			.clone();
+	}
+	fn best_move(&mut self, player: u8) -> usize {
+		let res = self._best_move(player, 0);
+		println!("winrate = {}", res.winrate);
+		return res.index;
+	}
 }
 
-fn solve(table: &String) -> String {
-  let mut memo: HashSet<String> = HashSet::new();  
-  let mut dp: Vec<VecDeque<State>> = repeat(VecDeque::new()).take(128).collect();
-  let mut mn = heuristic(&table) as usize;
-  dp[mn].push_back(State {
-    table: table.clone(),
-    cost: 0,
-    path: "".to_string(),
-  });
-
-  loop {
-    while dp[mn].is_empty() { mn += 1 }
-    if let Some(curr) = dp[mn].pop_front() {
-      if curr.table == FINISH_TABLE {
-        return curr.path
-      }
-      else if let Some(ans) = PRECOMPUTED_ANSWERS.get(&curr.table) {
-        return format!("{}{}", curr.path, ans);
-      }
-      else {
-        for next in curr.ways() {
-          if !memo.contains(&next.table) {
-            let pos = next.cost as usize + heuristic(&next.table) as usize;
-            memo.insert(next.table.to_string());
-            dp[pos].push_back(next);
-            if pos < mn { 
-              mn = pos
-            }
-          }
-        }
-      }
-    }
-  }
+impl fmt::Debug for Connect4 {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		for row in self.board.iter().enumerate() {
+			writeln!(f, "{:?}", row);
+		}
+		Ok(())
+	}
+}
+ 
+#[wasm_bindgen]
+pub fn solve(inp: Vec<i32>, player: u8) -> usize {
+  let mut game = Connect4::from(inp);
+	return game.best_move(player);
 }
 
-fn simulate_walk(table: &String, dir: char) -> String {
-  let pos = start_idx(&table);
-  return walk(table, pos, match dir {
-    'U' => pos - 4,
-    'L' => pos - 1,
-    'R' => pos + 1,
-    'D' => pos + 4,
-    _ => panic!("not match dir {}", dir)
-  })
-}
-fn simulate_walks(table: &String, dir: &String) -> String {
-  return dir
-    .chars()
-    .fold(table.to_string(), |t, d| simulate_walk(&t, d))
+#[wasm_bindgen]
+pub fn winner(inp: Vec<i32>) -> u8 {
+  let game = Connect4::from(inp);
+	return game.winner().unwrap_or(0);
 }
 
-fn test(n: usize) {
-  let start = Instant::now();
-  let tab = generate_table(FINISH_TABLE.to_string(), n);
-  let dir = solve(&tab);
-  let end = start.elapsed();
-  let sim = simulate_walks(&tab, &dir);
-  assert_eq!(sim, FINISH_TABLE);
-  println!("PASS {} ({:.2?}): {}", dir.len(), end, dir)
+fn main() {
+	let mut board = Connect4::new();
+	for &player in [1, 2].iter().cycle() {
+		let best_index = board.best_move(player);
+		println!("{:?}", best_index);
+		assert!(board.push(best_index, player).is_ok());
+		println!("{:?}", board.get_valid_moves());
+		println!("{:?}", board);
+		if board.winner().is_some() {
+			return
+		}
+	}
 }
+
 ```

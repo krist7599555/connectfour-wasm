@@ -1,0 +1,15 @@
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "typeRoots": ["src/types"],
+    "baseUrl": "./",
+    "paths": {
+      "*": [
+        "src/types/*",
+        "*"
+      ],
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules/*", "__sapper__/*", "_public/*"]
+}

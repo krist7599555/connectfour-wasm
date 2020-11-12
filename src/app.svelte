@@ -1,184 +1,152 @@
-<div class="puzzle">
-  <h1>Super 15 Puzzle</h1>
-  <div class='grid'>
-    {#each react_list as item (item)}
-    <div animate:flip={{duration: 200}} class="item" class:hidden={item == 0}>
-      {item}
-    </div>
-    {/each}
-  </div>
-  <div class="history">
-    {#each history as h}
-      <div class="item" flag={h.flag}>
-        {way2arrow(h.way)}
+<div id='app' class='flex flex-col justify-center items-center h-screen'>
+  winner = {winner}
+  <div class="app-board">
+    {#each board as row, i}
+    <div class="app-stack">
+        {#each row as itm, j}
+          <div class={`player-${itm}`} on:click={() => winner === 0 && push(i, current_player)}>
+            
+          </div>
+        {/each}
       </div>
     {/each}
   </div>
-
-  <button class="button" on:click={solve}>
-    solve
-  </button>
-  <button class="button" on:click={() => history = []}>
-    clear history
-  </button>
+  <div class="w-80vmin mt-2 w-full flex justify-between">
+    <div id='app-current-player' class={`player-1 px-4 py-2 rounded border text-white player-${current_player}`}>
+      current player
+    </div>
+    <div>
+      <button id='undo' on:click={() => undo()} class="px-4 py-2 rounded border">undo</button>
+      <button id='ai-1' on:click={() => ai1 = !ai1} class="px-4 py-2 rounded border" class:player-1={ai1}>AI 1</button>
+      <button id='ai-2' on:click={() => ai2 = !ai2} class="px-4 py-2 rounded border" class:player-2={ai2}>AI 2</button>
+    </div>
+  </div>
 </div>
 
-<svelte:window on:keydown={keypress} />
+<script lang='ts'>
+  import { wait_wasm, solve, winner as wasm_winner } from './rust'
+  import indexOf from 'lodash/indexOf';
+  import flatten from 'lodash/flatten';
+  import isEmpty from 'lodash/isEmpty';
 
-<script>
-  import { wait_wasm, solve15puzzle, generate_table } from './rust'
-  import { flip } from 'svelte/animate';
-  import { interval, of, from, zip } from 'rxjs'
-  import { delay, map } from 'rxjs/operators'
-import { onMount } from 'svelte';
+  type Empty = 0;
+  type Player = 1 | 2;
+  type Item = Empty | Player;
 
-  let ls = '123456789ABCDEF0'
-  let history = []
+  const empty: Empty = 0;
 
-  $: react_list = ls.split("").map(c => {
-    return {
-      'A': 10,
-      'B': 11,
-      'C': 12,
-      'D': 13,
-      'E': 14,
-      'F': 15,
-    }[c] || +c
-  })
+  let ai1 = false;
+  let ai2 = false;
+  let lock  = false;
+  let current_player: Player = 1;
 
-  $: history_render = history.map(w => ({
-    '4': '↑',
-    '1': '←',
-    '-1': '→',
-    '-4': '↓'
-  }[w.way]))
-
-  function way2arrow(w) {
-    return {
-      '4': '↑',
-      '1': '←',
-      '-1': '→',
-      '-4': '↓'
-    }[w]
+  $: if (!lock && current_player == 1 && ai1) {
+    ai(current_player)
+  }
+  $: if (!lock && current_player == 2 && ai2) {
+    ai(current_player)
   }
 
-  function swap_idx(idx1, idx2) {
-    let mn = Math.min(idx1, idx2)
-    let mx = Math.max(idx1, idx2)
-    return ls.slice(0, mn) + ls[mx] + ls.slice(mn+1, mx) + ls[mn] + ls.slice(mx + 1)
+  const history: { row: number, col: number, turn: 1 | 2 }[] = []
+  let board: Item[][] = [
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+  ];
+
+  $: winner = 0;
+
+  function check_winner() {
+    winner = wasm_winner(flatten(board) as any)
   }
 
-  function move_item(t) {
-    const pos = ls.indexOf('0')
-    const [i, j] = [Math.floor(pos / 4), pos % 4]
-    if (t === -4 && i > 0) return swap_idx(pos, pos + t)
-    if (t === -1 && j > 0) return swap_idx(pos, pos + t)
-    if (t === 1 && j < 3) return swap_idx(pos, pos + t)
-    if (t === 4 && i < 3) return swap_idx(pos, pos + t)
-  }
-  
-  function try_move_item(way, flag=0) {
-    const new_ls = move_item(way)
-    if (new_ls) {
-      ls = new_ls
-      history = [...history, { way, flag }]
-    }
-  }
-
-  let is_block_input = false;
-  function keypress(e) {
-    if (is_block_input) return;
-    const ways = {
-      ArrowUp: 4,
-      ArrowLeft: 1,
-      ArrowRight: -1,
-      ArrowDown: -4,
-    }
-    const way = ways[e.key];
-    try_move_item(way, 0)
-  }
-
-  function solve() {
-    if (is_block_input) return;
-    is_block_input = true;
-    const ans = solve15puzzle(ls).split("")
+  function push(row: number, turn?: Player) {
+    if (winner !== 0) return false;
+    if (!turn) turn = current_player;
+    const col = indexOf(board[row], empty);
+    if (col == -1) return false;
     
-    zip(from(ans), interval(200))
-      .pipe(
-        map(v => v[0]),
-        map(c => ({
-          'U': -4,
-          'L': -1,
-          'R': 1,
-          'D': 4
-        }[c]))
-      )
-      .subscribe(
-        (w) => try_move_item(w, 1), 
-        (e) => console.error(e), 
-        () => is_block_input = false
-      )
-      
+    board[row][col] = turn;
+    history.push({ row, col, turn })
+    toggle_current_player();
+    check_winner();
+    return true;
   }
-  
+
+  function pop() {
+    if (isEmpty(history)) return false;
+    const { row, col, turn } = history.pop();
+    board[row][col] = empty;
+    toggle_current_player();
+    check_winner();
+    return true;
+  }
+  function toggle_current_player() {
+    current_player ^= 3;
+    return current_player
+  }
+
+  // appStacksEl.on('click', function () {
+  //   const idx = jquery(this).index();
+  //   push(idx)
+  // })
+
+  function undo() {
+    pop()
+  }
+
+  async function ai(player: number) {
+    lock = true;
+    await wait_wasm;
+    setTimeout(() => {
+      console.log(board)
+      const idx = solve(flatten(board) as any, player);
+      console.log(["solve", idx])
+      push(idx)
+      lock = false;
+    }, 0);
+  }
 </script>
 
-<style>
-  * {
-    user-select: none;
+<style lang='scss'>
+.w-80vmin {
+  width: 80vmin;
+}
+.app-board {
+  height: 80vmin;
+  width: 80vmin;
+  background-color: beige;
+  padding: 1rem;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+.app-stack {
+  width: 14.28%;
+  height: 100%;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  &:hover {
+    background-color: rgb(214, 214, 208);
   }
-  h1 {
-    text-align: center;
-    padding-bottom: 1rem;
-  }
-  .puzzle {
-    font-family: system-ui;
-    width: max(375px, 50vmin);
-    margin: auto;
-    padding-top: 3rem;
-    padding-bottom: 3rem;
-  }
-  .grid {
-    width: max(375px, 50vmin);
-    height: max(375px, 50vmin);
-    display: grid;
-    grid-template-rows: repeat(4, 1fr);
-    grid-template-columns: repeat(4, 1fr);
-    grid-gap: 5px;
-    margin: auto;
-  }
-  .grid > .item {
-    border-radius: 7px;
-    background-color: blanchedalmond;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 2rem;
-  }
-  .item.hidden {
-    opacity: 0;
-  }
-  .history {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
-    padding-top: 2rem;
-    padding-bottom: 2rem;
-  }
-  .history > .item {
-    padding: 4px;
-    font-size: 2rem;
-  }
-  .history > .item[flag='0'] {
-    color:rgb(211, 211, 211);
-  }
-  .history > .item[flag='1'] {
-    color: rgb(63, 203, 141);
-  }
-  .button {
-    padding: 1rem 2rem;
-    border: none;
+  > * { 
+    height: 14.28%;
+    background: rgba(110, 110, 110, 0.192); 
     border-radius: 8px;
-    background-color: #e8e9e4;
+    transform: scale(0.98);
   }
+}
+.player-1 { background: rgb(209, 32, 61) !important; }
+.player-2 { background: rgb(39, 39, 199) !important; }
+
+#ai.loading {
+  opacity: 0.5;
+  background-color: #eeeeee;
+}
 </style>
